@@ -1,0 +1,157 @@
+---
+title: "Lei de Okun"
+author: "Lucas Mendes"
+date: "31/05/2020"
+output: html_document
+---
+
+## Introdução
+
+A lei de Okun é uma equação que relaciona o hiato do produto com o hiato do desemprego. Em teoria, essa relação deve ser negativa, ou seja, caso o país passe por um um hiato positivo (PIB Real maior que o PIB Potencial), o hiato do desemprego deve ser negativo (Desemprego Real menor que o Desemprego Natural). Vamos verificar na prática essa relação?
+
+## Especificação
+
+$$
+U_{t} = \alpha + \beta(Y_{t} - Y^*_{t})
+$$
+
+$U_{t}$ = Desemprego no mês t
+
+$\alpha$ = Intercepto Linear
+
+$Y_{t}$ = PIB no mês t
+
+$Y^*_{t}$ = PIB potencial no mês t
+
+## Pacotes necessários
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+
+# install.packages("tidyverse")
+# install.packages("deflateBR")
+# install.packages("devtools")
+# install.packages("mFilter")
+# devtools::install.github("wilsonfreitas/rbcb")
+# install.packages("stargazer")
+
+library(tidyverse) # Melhor pacote do R
+library(deflateBR) # Deflacionar séries
+library(rbcb) # Pegar dados do banco central
+library(mFilter) # Pegar tendencia
+library(stargazer) # Tabelas de regressão
+```
+
+
+## Coleta dos dados
+
+Para coletar os dados iremos usar o pacote rbcb, especificamente a função get_series()
+
+```{r}
+PIB <- get_series(c("Produto" = 4380), # Número da série no banco central
+                  start_date = "2012-03-01",# Data inicial 
+                  end_date = "2019-12-01",# Data final
+                  as = "tibble") # Formato retornado
+
+Desemprego <- get_series(c("PNADc" = 24369), # Número da série no banco central
+                  start_date = "2012-03-01",# Data inicial
+                  end_date = "2019-12-01", # Data final
+                  as = "tibble") # Formato retornado
+```
+
+
+## Visualizando as séries
+
+### PIB
+
+```{r}
+PIB %>% ggplot(aes(date,Produto)) +
+  geom_line(size = 1) +
+  labs(title = "Produto Mensal Brasileiro Estimado",
+       caption = "Fonte: BCB",
+       y = "Em milhoes") +
+  theme_classic()
+```
+
+### Desemprego
+
+```{r}
+Desemprego %>% ggplot(aes(date,PNADc)) +
+  geom_line(size = 1) +
+  labs(title = "Taxa de Desocupação",
+       caption = "Fonte: BCB",
+       y = "%") +
+  theme_classic()
+```
+
+## Deflacionando o PIB
+
+Como podemos notar, nossa série de PIB não está deflacionada, parece até que nunca tivemos uma crise. Para realizar essa operação, iremos usar a função deflate do pacote deflateBR.
+
+
+```{r}
+PIB <- PIB %>%
+  mutate(Produto_deflacionado = deflate(Produto,date,"03/2012"))
+```
+
+Observando novamente o gráfico do produto
+
+```{r}
+PIB %>% ggplot(aes(date,Produto_deflacionado)) +
+  geom_line(size = 1) +
+  labs(title = "Produto Mensal Brasileiro Deflacionado Estimado",
+       caption = "Fonte: BCB",
+       y = "Em milhoes") +
+  theme_classic()
+```
+
+
+## Cálculo do Hiato do Produto
+
+Para calcular o hiato do produto iremos usar a função hpFilter, do pacote mFilter. Ela irá aplicar o filtro de Hodrick-Prescott para a nossa série de PIB. O objeto retornado é um objeto um pouco estranho, então busque saber como fazer o slice corretamente
+
+```{r}
+hp_pib <- hpfilter(PIB$Produto_deflacionado,freq = 1600)
+
+hp_pib$trend <- hp_pib$trend %>% t() %>% as.vector()
+
+PIB <- PIB %>%
+  mutate(Hiato_Produto = (hp_pib$cycle/hp_pib$trend)*100)
+```
+
+## Formatando nossa base de dados
+
+Com as transformações feitas, iremos agora agregar em um novo data frame a nossa base de dados
+
+```{r}
+dados <- Desemprego %>%
+  left_join(PIB %>% select(date,Hiato_Produto))
+```
+
+
+## Regressão
+
+Primeiro iremos observar a relação entre o Hiato do Produto e a taxa de desemprego
+
+```{r}
+dados %>%
+  ggplot(aes(x = Hiato_Produto,y = PNADc)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+Vemos que há uma relação negativa entra as variáveis, porém os dados encontram - se muito dispersos.
+
+Montaremos agora nosso modelo usando a função lm(), nativa do R
+
+```{r}
+modelo <- lm(PNADc ~ Hiato_Produto,dados)
+```
+
+
+De posse do nosso modelo, podemos visualizar suas estatisticas usando a função table do pacote knitr
+
+```{r results = "asis"}
+stargazer(modelo, title="Results",type = 'html',
+          style = "aer")
+```
